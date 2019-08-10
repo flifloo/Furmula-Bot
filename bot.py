@@ -148,10 +148,11 @@ async def set_default_roles_error(ctx, error):
 @commands.has_permissions(administrator=True)
 async def default_role(ctx):
     """ctx: context object
-    Show guild default role"""
+    Show guild default roles"""
     with shelve.open("config.conf") as conf:
-        role = ctx.guild.get_role(conf[str(ctx.guild.id)]["default_role_id"]).name  # Get role
-        await ctx.send(f"Guild default role: ``{role}``")
+        new_role = ctx.guild.get_role(conf[str(ctx.guild.id)]["default_role_id"][0]).name  # Get new role
+        role = ctx.guild.get_role(conf[str(ctx.guild.id)]["default_role_id"][1]).name  # Get default role
+        await ctx.send(f"Guild default roles: ``{new_role}`` and ``{role}``")
 
 
 @default_role.error
