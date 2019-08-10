@@ -40,7 +40,7 @@ async def on_member_join(member):
     If available, add a default role to new members of guild"""
     with shelve.open("config.conf") as conf:
         if "default_role_id" in conf[str(member.guild.id)] and conf[str(member.guild.id)]["default_role_id"]:
-            role = member.guild.get_role(conf[str(member.guild.id)]["default_role_id"])  # Get the role from guild
+            role = member.guild.get_role(conf[str(member.guild.id)]["default_role_id"][0])  # Get the role from guild
             await member.add_roles(role)
 
 
@@ -73,6 +73,13 @@ async def reaction_role(message_id, guild, emoji, member, state):
                 message_id in conf[str(guild.id)]["reaction_messages"] and \
                 emoji in conf[str(guild.id)]["reaction_messages"][message_id]:
 
+            # If member has default new role, give him default role
+            def_new_role = guild.get_role(conf[str(guild.id)]["default_role_id"][0])
+            if def_new_role in member.roles:
+                def_role = guild.get_role(conf[str(guild.id)]["default_role_id"][1])
+                await member.remove_roles(def_new_role)
+                await member.add_roles(def_role)
+
             role = guild.get_role(conf[str(guild.id)]["reaction_messages"][message_id][emoji])  # Get the target role
 
             # State-dependent action
@@ -86,8 +93,9 @@ async def reaction_role(message_id, guild, emoji, member, state):
 @commands.has_permissions(administrator=True)
 async def help_cmd(ctx):
     embed = Embed(title="Help", description="", color=0xffff00)
-    embed.add_field(name="Set default role", value="``set_default_role @role`` to set new member default role, if any "
-                                                   "role mentioned this disable the option")
+    embed.add_field(name="Set default role", value="``set_default_roles @new_default @default`` to set new member "
+                                                   "default role and default role, if any role mentioned this disable "
+                                                   "the option")
     embed.add_field(name="Default role", value="``default_role`` show the new member default role")
     embed.add_field(name="Reaction message", value="""``reaction_message <action> <message id> <...>``
     **__actions :__**
@@ -109,24 +117,26 @@ async def help_cmd_error(ctx, error):
 @bot.command()
 @commands.guild_only()
 @commands.has_permissions(administrator=True)
-async def set_default_role(ctx):
+async def set_default_roles(ctx):
     """ctx: context object
     Set the default role of a guild"""
     with shelve.open("config.conf", writeback=True) as conf:
-        if len(ctx.message.role_mentions) == 1:  # Accept only one mentioned role
-            conf[str(ctx.guild.id)]["default_role_id"] = ctx.message.role_mentions[0].id  # Set in configuration
-            await ctx.send(f"Role ``{ctx.message.role_mentions[0].name}`` set to default role :white_check_mark:")
+        if len(ctx.message.role_mentions) == 2:  # Accept only two mentioned role
+            conf[str(ctx.guild.id)]["default_role_id"] = [ctx.message.role_mentions[0].id,
+                                                          ctx.message.role_mentions[1].id]  # Set in configuration
+            await ctx.send(f"Roles ``{ctx.message.role_mentions[0].name}`` and ``{ctx.message.role_mentions[1].name}``"
+                           f" set to default role :white_check_mark:")
         elif len(ctx.message.role_mentions) == 0:  # If any role, disable default role option
-            conf[str(ctx.guild.id)]["default_role_id"] = "" # Set in configuration
+            conf[str(ctx.guild.id)]["default_role_id"] = ""  # Set in configuration
             await ctx.send("Default role disabled :warning:")
         else:  # If invalid arguments
             raise commands.BadArgument
 
 
-@set_default_role.error
-async def set_default_role_error(ctx, error):
+@set_default_roles.error
+async def set_default_roles_error(ctx, error):
     """ctx: context object, error: raised error
-    Manage set_default_role command errors"""
+    Manage set_default_roles command errors"""
     if isinstance(error, commands.BadArgument):
         await ctx.send("Invalid mentioned role ! :x:")
     if isinstance(error, commands.errors.MissingPermissions):
