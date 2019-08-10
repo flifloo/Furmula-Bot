@@ -298,7 +298,6 @@ async def reaction(ctx, action, message_id, emoji=None):
 
 @reaction.error
 async def reaction_error(ctx, error):
-    print(error)
     """ctx: context object, error: raised error
     Manage reaction command errors"""
     err = {"argument": "Invalid arguments !", "message id": "Invalid message id", "already set": "Message already set",
@@ -363,11 +362,10 @@ async def purge(ctx):
         pass
 
 
-@reaction_list.error
-async def reaction_list_error(ctx, error):
-    print(error)
+@purge.error
+async def purge_error(ctx, error):
     """ctx: context object, error: raised error
-    Manage reaction_list command errors"""
+    Manage purge command errors"""
     if isinstance(error, commands.errors.MissingPermissions):
         await ctx.send("You are missing Manage messages permission to run this command ! :no_entry:")
 
