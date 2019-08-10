@@ -29,16 +29,10 @@ async def on_guild_join(guild):
 
 @bot.event
 async def on_member_join(member):
-    print(1)
     with shelve.open("config.conf") as conf:
-        print(2)
-        print(conf[str(member.guild.id)]["default_role_id"])
         if "default_role_id" in conf[str(member.guild.id)] and conf[str(member.guild.id)]["default_role_id"]:
-            print(3)
             role = member.guild.get_role(conf[str(member.guild.id)]["default_role_id"])
-            print(4)
             await member.add_roles(role)
-            print(5)
 
 
 @bot.command()
