@@ -1,21 +1,25 @@
 import shelve
-from discord import NotFound, InvalidArgument
+from discord import NotFound, InvalidArgument, Embed
 from discord.ext import commands
 
-bot = commands.Bot(command_prefix="%")
+bot = commands.Bot(command_prefix="%")  # Set bot object and command prefix
+bot.remove_command("help")  # Override default help command
 
 
 def set_config(guild, conf):
+    """guild : guild object, conf: shelve object
+    Set configuration for server on configuration file"""
     print(f"Set config for {guild.name}")
-    conf[str(guild.id)] = dict()
-    for opt in [["default_role_id", ""], ["reaction_messages", dict()]]:
+    conf[str(guild.id)] = dict()  # Create default dictionary
+    for opt in [["default_role_id", ""], ["reaction_messages", dict()]]:  # Set up each option in configuration file
         conf[str(guild.id)][opt[0]] = opt[1]
 
 
 @bot.event
 async def on_ready():
+    """When bot start check if guilds doesn't need configuration"""
     with shelve.open("config.conf", writeback=True) as conf:
-        for g in bot.guilds:
+        for g in bot.guilds:  # Check each guild
             if str(g.id) not in conf:
                 set_config(g, conf)
 
@@ -24,136 +28,234 @@ async def on_ready():
 
 @bot.event
 async def on_guild_join(guild):
+    """guild: guild object
+    If the bot get a new guild, setup the configuration"""
     with shelve.open("config.conf", writeback=True) as conf:
         set_config(guild, conf)
 
 
 @bot.event
 async def on_member_join(member):
+    """member: member object
+    If available, add a default role to new members of guild"""
     with shelve.open("config.conf") as conf:
         if "default_role_id" in conf[str(member.guild.id)] and conf[str(member.guild.id)]["default_role_id"]:
-            role = member.guild.get_role(conf[str(member.guild.id)]["default_role_id"])
+            role = member.guild.get_role(conf[str(member.guild.id)]["default_role_id"])  # Get the role from guild
             await member.add_roles(role)
 
 
 @bot.event
 async def on_raw_reaction_add(payload):
-    guild = bot.get_guild(payload.guild_id)
-    member = guild.get_member(payload.user_id)
+    """payload: RawReaction payload object
+    When a reaction is add check if is a role reaction and apply the request"""
+    guild = bot.get_guild(payload.guild_id)  # Get the current guild
+    member = guild.get_member(payload.user_id)  # Get the current member
     await reaction_role(payload.message_id, guild, str(payload.emoji), member, True)
 
 
 @bot.event
 async def on_raw_reaction_remove(payload):
-    guild = bot.get_guild(payload.guild_id)
-    member = guild.get_member(payload.user_id)
+    """payload: RawReaction payload object
+    When a reaction is remove check if is a role reaction and apply the request"""
+    guild = bot.get_guild(payload.guild_id)  # Get the current guild
+    member = guild.get_member(payload.user_id)  # Get the current member
     await reaction_role(payload.message_id, guild, str(payload.emoji), member, False)
 
 
 async def reaction_role(message_id, guild, emoji, member, state):
+    """message_id: (int) the id of the message, guild: guild object, emoji: the reaction emoji, member: member object,
+        state: (bool) add or remove target role
+    Check the configuration and if available, set the link role to the player"""
     with shelve.open("config.conf") as conf:
+        # Avoid bot user and check if message and reaction are in configuration
         if not member.bot and \
                 "reaction_messages" in conf[str(guild.id)] and \
                 message_id in conf[str(guild.id)]["reaction_messages"] and \
                 emoji in conf[str(guild.id)]["reaction_messages"][message_id]:
 
-            role = guild.get_role(conf[str(guild.id)]["reaction_messages"][message_id][emoji])
+            role = guild.get_role(conf[str(guild.id)]["reaction_messages"][message_id][emoji])  # Get the target role
 
+            # State-dependent action
             if state:
                 await member.add_roles(role)
             else:
                 await member.remove_roles(role)
 
 
-@bot.command()
-async def shutdown(ctx):
-    if await bot.is_owner(ctx.author):
-        await ctx.send("Shutdown !")
-        await bot.logout()
-        await bot.close()
-    else:
-        await ctx.send("Not allowed !")
+@bot.command(name="help")
+@commands.has_permissions(administrator=True)
+async def help_cmd(ctx):
+    embed = Embed(title="Help", description="", color=0xffff00)
+    embed.add_field(name="Set default role", value="``set_default_role @role`` to set new member default role, if any "
+                                                   "role mentioned this disable the option")
+    embed.add_field(name="Default role", value="``default_role`` show the new member default role")
+    embed.add_field(name="Reaction message", value="""``reaction_message <action> <message id> <...>``
+    **__actions :__**
+    ``set <message id>`` to set a reaction message
+    ``unset <message id>`` to unset a reaction message
+    ``add <message id> <reaction emoji> @role`` to add a reaction on set message
+    ``remove <message id> <reaction emoji>`` to remove a reaction on set message""")
+    await ctx.send(embed=embed)
+
+
+@help_cmd.error
+async def help_cmd_error(ctx, error):
+    """ctx: context object, error: raised error
+    Manage help_cmd command errors"""
+    if isinstance(error, commands.errors.MissingPermissions):
+        await ctx.send("You are missing Administrator permission to run this command ! :no_entry:")
 
 
 @bot.command()
 @commands.guild_only()
+@commands.has_permissions(administrator=True)
 async def set_default_role(ctx):
+    """ctx: context object
+    Set the default role of a guild"""
     with shelve.open("config.conf", writeback=True) as conf:
-        if len(ctx.message.role_mentions) == 1:
-            conf[str(ctx.guild.id)]["default_role_id"] = ctx.message.role_mentions[0].id
-            await ctx.send(f"Role ``{ctx.message.role_mentions[0].name}`` set to default role")
-        elif len(ctx.message.role_mentions) == 0:
-            conf[str(ctx.guild.id)]["default_role_id"] = ""
-            await ctx.send("Default role disabled")
-        else:
-            await ctx.send("Too many roles !")
+        if len(ctx.message.role_mentions) == 1:  # Accept only one mentioned role
+            conf[str(ctx.guild.id)]["default_role_id"] = ctx.message.role_mentions[0].id  # Set in configuration
+            await ctx.send(f"Role ``{ctx.message.role_mentions[0].name}`` set to default role :white_check_mark:")
+        elif len(ctx.message.role_mentions) == 0:  # If any role, disable default role option
+            conf[str(ctx.guild.id)]["default_role_id"] = "" # Set in configuration
+            await ctx.send("Default role disabled :warning:")
+        else:  # If invalid arguments
+            raise commands.BadArgument
+
+
+@set_default_role.error
+async def set_default_role_error(ctx, error):
+    """ctx: context object, error: raised error
+    Manage set_default_role command errors"""
+    if isinstance(error, commands.BadArgument):
+        await ctx.send("Invalid mentioned role ! :x:")
+    if isinstance(error, commands.errors.MissingPermissions):
+        await ctx.send("You are missing Administrator permission to run this command ! :no_entry:")
 
 
 @bot.command()
 @commands.guild_only()
+@commands.has_permissions(administrator=True)
 async def default_role(ctx):
+    """ctx: context object
+    Show guild default role"""
     with shelve.open("config.conf") as conf:
-        await ctx.send(conf[str(ctx.guild.id)]["default_role_id"])
+        role = ctx.guild.get_role(conf[str(ctx.guild.id)]["default_role_id"]).name  # Get role
+        await ctx.send(f"Guild default role: ``{role}``")
+
+
+@default_role.error
+async def default_role_error(ctx, error):
+    """ctx: context object, error: raised error
+    Manage default_role command errors"""
+    if isinstance(error, commands.errors.MissingPermissions):
+        await ctx.send("You are missing Administrator permission to run this command ! :no_entry:")
 
 
 @bot.command()
 @commands.guild_only()
-async def reaction_message(ctx, state=None, message_id=None, reaction=None):
-    if state not in ["set", "unset", "add", "remove"]:
-        await ctx.send("Wrong argument !")
+@commands.has_permissions(administrator=True)
+async def reaction_message(ctx, action=None, message_id=None, reaction=None):
+    """ctx: context object, action: (str) command action, message_id: (str) the message id,
+        reaction: (str) reaction emoji
+    Set or unset a reaction message and add reaction emoji link with roles"""
+    if action not in ["set", "unset", "add", "remove"]:  # Check if action is correct
+        raise commands.BadArgument("argument")
     else:
-        try:
+        try:  # Check message id
             message = await ctx.fetch_message(int(message_id))
         except (TypeError, ValueError, NotFound):
-            await ctx.send("Invalid message ID !")
+            raise commands.BadArgument("message id")
         else:
             with shelve.open("config.conf", writeback=True) as conf:
-                if state == "set":
-                    if message.id in conf[str(ctx.guild.id)]["reaction_messages"]:
-                        await ctx.send("Message already set !")
+                if action == "set":  # Set a reaction message
+                    if message.id in conf[str(ctx.guild.id)]["reaction_messages"]:  # Check if not already set
+                        raise commands.BadArgument("already set")
                     else:
-                        conf[str(ctx.guild.id)]["reaction_messages"][message.id] = dict()
-                        await ctx.send("Message set")
-                elif state == "unset":
-                    try:
+                        conf[str(ctx.guild.id)]["reaction_messages"][message.id] = dict()  # Add to configuration
+                        await ctx.send("Message set :white_check_mark:")
+                elif action == "unset":  # Unset a reaction message
+                    try:  # Check if the message is set when remove
                         del conf[str(ctx.guild.id)]["reaction_messages"][message.id]
                     except KeyError:
-                        await ctx.send("Message not set !")
+                        raise commands.BadArgument("not set")
                     else:
-                        await ctx.send("Message remove")
-                else:
-                    if message.id not in conf[str(ctx.guild.id)]["reaction_messages"]:
-                        await ctx.send("Message not set !")
+                        await ctx.send("Message remove :wastebasket:")
+                else:  # Add and Remove reaction actions
+                    if message.id not in conf[str(ctx.guild.id)]["reaction_messages"]:  # Check if message is set
+                        raise commands.BadArgument("not set")
                     else:
-                        if state == "add":
-                            if len(ctx.message.role_mentions) != 1:
-                                await ctx.send("Invalid role !")
+                        if action == "add":  # Add reaction
+                            if len(ctx.message.role_mentions) != 1:  # Check if correct mentioned role
+                                raise commands.BadArgument("role")
                             else:
-                                try:
+                                try:  # Add reaction to message and check if given emoji is correct
                                     await message.add_reaction(reaction)
                                 except InvalidArgument:
-                                    await ctx.send("Invalid reaction !")
-                                else:
+                                    raise commands.BadArgument("reaction")
+                                else:  # Add reaction and role to configuration
                                     conf[str(ctx.guild.id)]["reaction_messages"][message.id][reaction] =\
                                         ctx.message.role_mentions[0].id
-                                    await ctx.send("Reaction add")
-                        if state == "remove":
-                            try:
+                                    await ctx.send("Reaction add :white_check_mark:")
+                        if action == "remove":  # Remove a reaction
+                            try:  # Remove reaction from message and check if given emoji is correct
                                 await message.remove_reaction(reaction, bot.user)
                             except (InvalidArgument, NotFound):
-                                await ctx.send("Invalid reaction !")
-                            else:
+                                raise commands.BadArgument("reaction")
+                            else:  # Delete reaction from configuration
                                 del conf[str(ctx.guild.id)]["reaction_messages"][message.id][reaction]
-                                await ctx.send("Reaction remove")
+                                await ctx.send("Reaction remove :wastebasket:")
+
+
+@reaction_message.error
+async def reaction_message_error(ctx, error):
+    """ctx: context object, error: raised error
+    Manage reaction_message command errors"""
+    err = {"argument": "Invalid arguments !", "message id": "Invalid message id", "already set": "Message already set",
+           "not set": "Message not set", "role": "Invalid mentioned role", "reaction": "Invalid reaction"}  # Database
+    if str(error) in err:
+        await ctx.send(f"{err[str(error)]} :x:")
+    if isinstance(error, commands.errors.MissingPermissions):
+        await ctx.send("You are missing Administrator permission to run this command ! :no_entry:")
 
 
 @bot.command()
-async def debug(ctx, config=None):
-    with shelve.open("config.conf") as conf:
-        data = conf[str(ctx.guild.id)]
-        if config:
-            data = data[config]
-        print(data)
-        await ctx.send(f"``{data}``")
+@commands.is_owner()
+async def shutdown(ctx):
+    """ctx: context object
+    Owner shutdown command"""
+    if await bot.is_owner(ctx.author):
+        await ctx.send("Shutdown ! :wave:")
+        await bot.logout()
+        await bot.close()
 
-bot.run(open("token.ini").read())
+
+@shutdown.error
+async def shutdown_error(ctx, error):
+    """ctx: context object, error: raised error
+    Manage shutdown command errors"""
+    if isinstance(error, commands.errors.NotOwner):
+        await ctx.send("You do not own this bot ! :no_entry:")
+
+
+@bot.command()
+@commands.is_owner()
+async def debug(ctx, config=None):
+    """ctx: context object, config: (str) configuration entry to check"""
+    if await bot.is_owner(ctx.author):
+        with shelve.open("config.conf") as conf:
+            data = conf[str(ctx.guild.id)]  # Add all guild configuration
+            if config:  # If specified send only target configuration
+                data = data[config]
+            await ctx.send(f"``{data}``")
+
+
+@debug.error
+async def debug_error(ctx, error):
+    """ctx: context object, error: raised error
+    Manage debug command errors"""
+    if isinstance(error, commands.errors.NotOwner):
+        await ctx.send("You do not own this bot ! :no_entry:")
+
+
+bot.run(open("token.ini").read())  # Get token from token.ini and start the bot
