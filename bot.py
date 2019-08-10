@@ -6,6 +6,15 @@ bot = commands.Bot(command_prefix="%")  # Set bot object and command prefix
 bot.remove_command("help")  # Override default help command
 
 
+def set_config(guild, conf):
+    """guild : guild object, conf: shelve object
+    Set configuration for server on configuration file"""
+    print(f"Set config for {guild.name}")
+    conf[str(guild.id)] = dict()  # Create default dictionary
+    for opt in [["default_role_id", ""], ["reaction", dict()]]:  # Set up each option in configuration file
+        conf[str(guild.id)][opt[0]] = opt[1]
+
+
 async def find_message(guild, message_id):
     """guild: guild object, messgae_id: (in) message id
     Find a message on a guild"""
@@ -29,13 +38,27 @@ async def clean_reaction(message, emoji):
                 await r.remove(u)
 
 
-def set_config(guild, conf):
-    """guild : guild object, conf: shelve object
-    Set configuration for server on configuration file"""
-    print(f"Set config for {guild.name}")
-    conf[str(guild.id)] = dict()  # Create default dictionary
-    for opt in [["default_role_id", ""], ["reaction", dict()]]:  # Set up each option in configuration file
-        conf[str(guild.id)][opt[0]] = opt[1]
+async def event_check(guild_id=None, message_id=None, user_id=None, emoji=None):
+    """guild_id: (int) the guild id, message_id: (int) the message id
+    Check if the event touch a message in config and remove it if needed"""
+    if message_id and user_id and guild_id:  # If bot reaction is remove
+        with shelve.open("config.conf", writeback=True) as conf:
+            guild = bot.get_guild(guild_id)
+            if message_id in conf[str(guild.id)]["reaction"] and user_id == bot.user.id:
+                message = await find_message(guild, message_id)
+                await clean_reaction(message, emoji)
+                del conf[str(guild.id)]["reaction"][message_id][emoji]
+                if len(conf[str(guild.id)]["reaction"][message_id]) == 0:
+                    del conf[str(guild.id)]["reaction"][message_id]
+                return True
+        return False
+    elif guild_id and message_id:  # If message reaction is remove
+        with shelve.open("config.conf", writeback=True) as conf:
+            guild = bot.get_guild(guild_id)
+            if message_id in conf[str(guild.id)]["reaction"]:
+                del conf[str(guild.id)]["reaction"][message_id]
+                return True
+        return False
 
 
 @bot.event
@@ -80,9 +103,24 @@ async def on_raw_reaction_add(payload):
 async def on_raw_reaction_remove(payload):
     """payload: RawReaction payload object
     When a reaction is remove check if is a role reaction and apply the request"""
-    guild = bot.get_guild(payload.guild_id)  # Get the current guild
-    member = guild.get_member(payload.user_id)  # Get the current member
-    await reaction_role(payload.message_id, guild, str(payload.emoji), member, False)
+    if not await event_check(payload.guild_id, payload.message_id, payload.user_id, str(payload.emoji)):  # Event check
+        guild = bot.get_guild(payload.guild_id)  # Get the current guild
+        member = guild.get_member(payload.user_id)  # Get the current member
+        await reaction_role(payload.message_id, guild, str(payload.emoji), member, False)
+
+
+@bot.event
+async def on_raw_message_delete(payload):
+    """payload: RawMessageDelete payload object
+    When a message is remove check if is not in configuration to delete it"""
+    await event_check(payload.guild_id, payload.message_id)
+
+
+@bot.event
+async def on_raw_reaction_clear(payload):
+    """payload: RawReactionClear payload object
+    When a reaction clear check if is not in configuration to delete it"""
+    await event_check(payload.guild_id, payload.message_id)
 
 
 async def reaction_role(message_id, guild, emoji, member, state):
