@@ -1,9 +1,11 @@
 import shelve
 from discord import NotFound, InvalidArgument, HTTPException, Embed
 from discord.ext import commands
+from asyncio import sleep
 
 bot = commands.Bot(command_prefix="%")  # Set bot object and command prefix
 bot.remove_command("help")  # Override default help command
+purges = dict()
 
 
 def set_config(guild, conf):
@@ -96,7 +98,18 @@ async def on_raw_reaction_add(payload):
     When a reaction is add check if is a role reaction and apply the request"""
     guild = bot.get_guild(payload.guild_id)  # Get the current guild
     member = guild.get_member(payload.user_id)  # Get the current member
-    await reaction_role(payload.message_id, guild, str(payload.emoji), member, True)
+
+    if payload.user_id in purges:
+        if payload.channel_id == purges[member.id].channel.id:
+            channel = guild.get_channel(payload.channel_id)
+            message = await channel.fetch_message(payload.message_id)
+            async with channel.typing():
+                await channel.purge(before=purges[payload.user_id], after=message)
+                await purges[payload.user_id].delete()
+                await message.delete()
+                del purges[payload.user_id]
+    else:
+        await reaction_role(payload.message_id, guild, str(payload.emoji), member, True)
 
 
 @bot.event
@@ -332,6 +345,31 @@ async def reaction_list_error(ctx, error):
     Manage reaction_list command errors"""
     if isinstance(error, commands.errors.MissingPermissions):
         await ctx.send("You are missing Administrator permission to run this command ! :no_entry:")
+
+
+@bot.command()
+@commands.guild_only()
+@commands.has_permissions(manage_messages=True)
+async def purge(ctx):
+    purges[ctx.message.author.id] = ctx.message
+    await ctx.message.add_reaction("👍")
+
+    await sleep(2*60)
+    try:
+        if purges[ctx.message.author.id] == ctx.message:
+            await ctx.message.clear_reactions()
+            del purges[ctx.message.author.id]
+    except (KeyError, HTTPException):
+        pass
+
+
+@reaction_list.error
+async def reaction_list_error(ctx, error):
+    print(error)
+    """ctx: context object, error: raised error
+    Manage reaction_list command errors"""
+    if isinstance(error, commands.errors.MissingPermissions):
+        await ctx.send("You are missing Manage messages permission to run this command ! :no_entry:")
 
 
 @bot.command()
