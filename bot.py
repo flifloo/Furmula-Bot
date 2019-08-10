@@ -1,9 +1,32 @@
 import shelve
-from discord import NotFound, InvalidArgument, Embed
+from discord import NotFound, InvalidArgument, HTTPException, Embed
 from discord.ext import commands
 
 bot = commands.Bot(command_prefix="%")  # Set bot object and command prefix
 bot.remove_command("help")  # Override default help command
+
+
+async def find_message(guild, message_id):
+    """guild: guild object, messgae_id: (in) message id
+    Find a message on a guild"""
+    message = None
+    for c in guild.text_channels:
+        try:  # Check message id
+            message = await c.fetch_message(int(message_id))
+        except NotFound:
+            pass
+        else:
+            break
+    return message
+
+
+async def clean_reaction(message, emoji):
+    """message: message object, emoji, target emoji
+    Clean all reaction of a specific message and emoji"""
+    for r in message.reactions:
+        if str(r) == emoji:
+            async for u in r.users():
+                await r.remove(u)
 
 
 def set_config(guild, conf):
@@ -11,7 +34,7 @@ def set_config(guild, conf):
     Set configuration for server on configuration file"""
     print(f"Set config for {guild.name}")
     conf[str(guild.id)] = dict()  # Create default dictionary
-    for opt in [["default_role_id", ""], ["reaction_messages", dict()]]:  # Set up each option in configuration file
+    for opt in [["default_role_id", ""], ["reaction", dict()]]:  # Set up each option in configuration file
         conf[str(guild.id)][opt[0]] = opt[1]
 
 
@@ -39,7 +62,7 @@ async def on_member_join(member):
     """member: member object
     If available, add a default role to new members of guild"""
     with shelve.open("config.conf") as conf:
-        if "default_role_id" in conf[str(member.guild.id)] and conf[str(member.guild.id)]["default_role_id"]:
+        if conf[str(member.guild.id)]["default_role_id"]:
             role = member.guild.get_role(conf[str(member.guild.id)]["default_role_id"][0])  # Get the role from guild
             await member.add_roles(role)
 
@@ -69,18 +92,19 @@ async def reaction_role(message_id, guild, emoji, member, state):
     with shelve.open("config.conf") as conf:
         # Avoid bot user and check if message and reaction are in configuration
         if not member.bot and \
-                "reaction_messages" in conf[str(guild.id)] and \
-                message_id in conf[str(guild.id)]["reaction_messages"] and \
-                emoji in conf[str(guild.id)]["reaction_messages"][message_id]:
+                "reaction" in conf[str(guild.id)] and \
+                message_id in conf[str(guild.id)]["reaction"] and \
+                emoji in conf[str(guild.id)]["reaction"][message_id]:
 
             # If member has default new role, give him default role
-            def_new_role = guild.get_role(conf[str(guild.id)]["default_role_id"][0])
-            if def_new_role in member.roles:
-                def_role = guild.get_role(conf[str(guild.id)]["default_role_id"][1])
-                await member.remove_roles(def_new_role)
-                await member.add_roles(def_role)
+            if conf[str(member.guild.id)]["default_role_id"]:
+                def_new_role = guild.get_role(conf[str(guild.id)]["default_role_id"][0])
+                if def_new_role in member.roles:
+                    def_role = guild.get_role(conf[str(guild.id)]["default_role_id"][1])
+                    await member.remove_roles(def_new_role)
+                    await member.add_roles(def_role)
 
-            role = guild.get_role(conf[str(guild.id)]["reaction_messages"][message_id][emoji])  # Get the target role
+            role = guild.get_role(conf[str(guild.id)]["reaction"][message_id][emoji])  # Get the target role
 
             # State-dependent action
             if state:
@@ -94,15 +118,16 @@ async def reaction_role(message_id, guild, emoji, member, state):
 async def help_cmd(ctx):
     embed = Embed(title="Help", description="", color=0xffff00)
     embed.add_field(name="Set default role", value="``set_default_roles @new_default @default`` to set new member "
-                                                   "default role and default role, if any role mentioned this disable "
+                                                   "default role and default role, if no role mentioned this disable "
                                                    "the option")
     embed.add_field(name="Default roles", value="``default_role`` show the default roles")
-    embed.add_field(name="Reaction message", value="""``reaction_message <action> <message id> <...>``
+    embed.add_field(name="Reaction", value="""``reaction <action> <...>``
     **__actions :__**
-    ``set <message id>`` to set a reaction message
-    ``unset <message id>`` to unset a reaction message
-    ``add <message id> <reaction emoji> @role`` to add a reaction on set message
-    ``remove <message id> <reaction emoji>`` to remove a reaction on set message""")
+    ``add <message id> <reaction emoji> @role`` to add/edit a reaction on message
+    ``remove <message id> <reaction emoji>`` to remove a reaction on message
+    ``remove-all <message id>`` to remove all reactions of a message""")
+    embed.add_field(name="Reaction list", value="``reaction_list`` show the list of message with role reaction on the "
+                                                "guild ")
     await ctx.send(embed=embed)
 
 
@@ -166,66 +191,107 @@ async def default_role_error(ctx, error):
 @bot.command()
 @commands.guild_only()
 @commands.has_permissions(administrator=True)
-async def reaction_message(ctx, action=None, message_id=None, reaction=None):
+async def reaction(ctx, action, message_id, emoji=None):
     """ctx: context object, action: (str) command action, message_id: (str) the message id,
-        reaction: (str) reaction emoji
+        emoji: (str) reaction emoji
     Set or unset a reaction message and add reaction emoji link with roles"""
-    if action not in ["set", "unset", "add", "remove"]:  # Check if action is correct
+    if action not in ["add", "remove", "remove-all"]:  # Check if action is correct
         raise commands.BadArgument("argument")
     else:
-        try:  # Check message id
-            message = await ctx.fetch_message(int(message_id))
-        except (TypeError, ValueError, NotFound):
+        try:
+            message_id = int(message_id)
+            message = await find_message(ctx.guild, message_id)
+            if not message:
+                raise ValueError
+        except ValueError:
             raise commands.BadArgument("message id")
-        else:
-            with shelve.open("config.conf", writeback=True) as conf:
-                if action == "set":  # Set a reaction message
-                    if message.id in conf[str(ctx.guild.id)]["reaction_messages"]:  # Check if not already set
-                        raise commands.BadArgument("already set")
-                    else:
-                        conf[str(ctx.guild.id)]["reaction_messages"][message.id] = dict()  # Add to configuration
-                        await ctx.send("Message set :white_check_mark:")
-                elif action == "unset":  # Unset a reaction message
-                    try:  # Check if the message is set when remove
-                        del conf[str(ctx.guild.id)]["reaction_messages"][message.id]
-                    except KeyError:
-                        raise commands.BadArgument("not set")
-                    else:
-                        await ctx.send("Message remove :wastebasket:")
-                else:  # Add and Remove reaction actions
-                    if message.id not in conf[str(ctx.guild.id)]["reaction_messages"]:  # Check if message is set
-                        raise commands.BadArgument("not set")
-                    else:
-                        if action == "add":  # Add reaction
-                            if len(ctx.message.role_mentions) != 1:  # Check if correct mentioned role
-                                raise commands.BadArgument("role")
-                            else:
-                                try:  # Add reaction to message and check if given emoji is correct
-                                    await message.add_reaction(reaction)
-                                except InvalidArgument:
-                                    raise commands.BadArgument("reaction")
-                                else:  # Add reaction and role to configuration
-                                    conf[str(ctx.guild.id)]["reaction_messages"][message.id][reaction] =\
-                                        ctx.message.role_mentions[0].id
-                                    await ctx.send("Reaction add :white_check_mark:")
-                        if action == "remove":  # Remove a reaction
-                            try:  # Remove reaction from message and check if given emoji is correct
-                                await message.remove_reaction(reaction, bot.user)
-                            except (InvalidArgument, NotFound):
-                                raise commands.BadArgument("reaction")
-                            else:  # Delete reaction from configuration
-                                del conf[str(ctx.guild.id)]["reaction_messages"][message.id][reaction]
-                                await ctx.send("Reaction remove :wastebasket:")
+
+        with shelve.open("config.conf", writeback=True) as conf:
+            if message.id not in conf[str(ctx.guild.id)]["reaction"]:  # Check if not already set
+                conf[str(ctx.guild.id)]["reaction"][message.id] = dict()  # Add to configuration
+            if action == "add":  # Add reaction
+                if len(ctx.message.role_mentions) != 1:  # Check if correct mentioned role
+                    raise commands.BadArgument("role")
+                else:
+                    try:  # Add reaction to message and check if given emoji is correct
+                        await message.add_reaction(emoji)
+                    except (InvalidArgument, NotFound, HTTPException):
+                        raise commands.BadArgument("reaction")
+                    else:  # Add reaction and role to configuration
+                        conf[str(ctx.guild.id)]["reaction"][message.id][emoji] =\
+                            ctx.message.role_mentions[0].id
+                        await ctx.send("Reaction add :white_check_mark:")
+
+            elif action == "remove":  # Remove a reaction
+                try:  # Remove reaction from message and check if given emoji is correct
+                    await message.remove_reaction(emoji, bot.user)
+                    await clean_reaction(message, emoji)
+                except (InvalidArgument, NotFound, HTTPException):
+                    raise commands.BadArgument("reaction")
+                else:  # Delete reaction from configuration
+                    del conf[str(ctx.guild.id)]["reaction"][message.id][emoji]
+                    if len(conf[str(ctx.guild.id)]["reaction"][message.id]) == 0:  # Clean if no reaction left
+                        del conf[str(ctx.guild.id)]["reaction"][message.id]
+                    await ctx.send("Reaction remove :wastebasket:")
+
+            elif action == "remove-all":  # Remove all reactions
+                for r in conf[str(ctx.guild.id)]["reaction"][message.id]:
+                    try:  # Remove all reaction from message
+                        await message.remove_reaction(r, bot.user)
+                        await clean_reaction(message, r)
+                    except (InvalidArgument, NotFound, HTTPException):
+                        pass
+                del conf[str(ctx.guild.id)]["reaction"][message.id]
+                await ctx.send("All reactions remove :wastebasket:")
 
 
-@reaction_message.error
-async def reaction_message_error(ctx, error):
+@reaction.error
+async def reaction_error(ctx, error):
+    print(error)
     """ctx: context object, error: raised error
-    Manage reaction_message command errors"""
+    Manage reaction command errors"""
     err = {"argument": "Invalid arguments !", "message id": "Invalid message id", "already set": "Message already set",
            "not set": "Message not set", "role": "Invalid mentioned role", "reaction": "Invalid reaction"}  # Database
     if str(error) in err:
         await ctx.send(f"{err[str(error)]} :x:")
+    if isinstance(error, commands.errors.MissingPermissions):
+        await ctx.send("You are missing Administrator permission to run this command ! :no_entry:")
+
+
+@bot.command()
+@commands.guild_only()
+@commands.has_permissions(administrator=True)
+async def reaction_list(ctx):
+    """ctx: context object
+    Show a list of all message with reaction role on the guild"""
+    embed = Embed(title="Reaction list", description="", color=0xffff00)
+    with shelve.open("config.conf", writeback=True) as conf:
+        for m in conf[str(ctx.guild.id)]["reaction"]:  # All message in configuration
+            message = await find_message(ctx.guild, m)
+            if not message:  # Clean if message not found
+                del conf[str(ctx.guild.id)]["reaction"][m]
+            else:
+                reactions = str()
+                for r in conf[str(ctx.guild.id)]["reaction"][m]:  # All reaction of message
+                    role = ctx.guild.get_role(conf[str(ctx.guild.id)]['reaction'][m][r])
+                    if not role:  # Clean if can't get role
+                        await clean_reaction(message, r)
+                        del conf[str(ctx.guild.id)]['reaction'][m][r]
+                    else:
+                        reactions += f"{r} - ``{role.name}``\n"
+                if len(conf[str(ctx.guild.id)]["reaction"][m]) == 0:  # Clean if any reaction left
+                    del conf[str(ctx.guild.id)]["reaction"][m]
+                else:
+                    embed.add_field(name=f"{m} [{message.channel.name}]", value=reactions, inline=False)
+        if len(embed.fields) == 0:
+            embed.add_field(name="Empty", value="No message with reaction on this guild :/")
+        await ctx.send(embed=embed)
+
+
+@reaction_list.error
+async def reaction_list_error(ctx, error):
+    """ctx: context object, error: raised error
+    Manage reaction_list command errors"""
     if isinstance(error, commands.errors.MissingPermissions):
         await ctx.send("You are missing Administrator permission to run this command ! :no_entry:")
 
