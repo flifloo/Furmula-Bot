@@ -96,7 +96,7 @@ async def help_cmd(ctx):
     embed.add_field(name="Set default role", value="``set_default_roles @new_default @default`` to set new member "
                                                    "default role and default role, if any role mentioned this disable "
                                                    "the option")
-    embed.add_field(name="Default role", value="``default_role`` show the new member default role")
+    embed.add_field(name="Default roles", value="``default_role`` show the default roles")
     embed.add_field(name="Reaction message", value="""``reaction_message <action> <message id> <...>``
     **__actions :__**
     ``set <message id>`` to set a reaction message
